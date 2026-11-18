@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECDH Secure Chat (Web Crypto API)</title>
+<style>
+  :root {
+    --bg: #eef1f5; --panel: #ffffff; --ink: #14213d; --muted: #5b6678;
+    --line: #d5dbe5; --alice: #0b6e6e; --bob: #a8432a; --warn: #b42318; --ok: #1a7f37;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px 8px; max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); }
+  main { max-width: 1100px; margin: 0 auto; padding: 12px 24px 40px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0 16px; }
+  button { font: inherit; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer;
+           background: var(--ink); color: #fff; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:focus-visible, input:focus-visible { outline: 2px solid #3b6cff; outline-offset: 2px; }
+  label.chk { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  #status { color: var(--muted); }
+  .peers { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .peer { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          display: flex; flex-direction: column; min-height: 420px; }
+  .peer h2 { margin: 0; padding: 12px 14px; font-size: 16px; color: #fff; border-radius: 8px 8px 0 0; }
+  #alice h2 { background: var(--alice); } #bob h2 { background: var(--bob); }
+  .meta { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .meta div { display: flex; gap: 8px; margin: 2px 0; }
+  .meta b { min-width: 92px; font-weight: 600; }
+  .meta code { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--muted); }
+  .msgs { flex: 1; padding: 12px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; max-height: 300px; }
+  .msg { max-width: 85%; padding: 8px 10px; border-radius: 8px; background: #f1f4f9; align-self: flex-start; word-wrap: break-word; }
+  .msg.me { align-self: flex-end; background: #dff1f1; }
+  #bob .msg.me { background: #f7e4de; }
+  .msg.err { background: #fde7e5; color: var(--warn); }
+  .send { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+  .send input { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; }
+  .wire { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .wire h3 { margin: 0; padding: 10px 14px; font-size: 14px; border-bottom: 1px solid var(--line); }
+  .wire h3 span { color: var(--muted); font-weight: 400; }
+  #wirelog { padding: 10px 14px; font-family: var(--mono); font-size: 12px; max-height: 240px; overflow-y: auto; }
+  #wirelog .row { padding: 6px 0; border-bottom: 1px dashed var(--line); word-break: break-all; }
+  #wirelog .row:last-child { border-bottom: 0; }
+  .tag { font-weight: 700; }
+  .tag.a { color: var(--alice); } .tag.b { color: var(--bob); } .tag.k { color: var(--ink); }
+  .tamper { color: var(--warn); }
+  @media (max-width: 760px) { .peers { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ECDH-based Secure Chat</h1>
+  <p>Two peers derive a shared key with ECDH (P-256) and encrypt every message with AES-GCM, using only the Web Crypto API.</p>
+</header>
+
+<main>
+  <div class="bar">
+    <button id="handshake">Generate keys and exchange</button>
+    <button id="reset" class="ghost">Reset</button>
+    <label class="chk"><input type="checkbox" id="tamper"> Tamper with next ciphertext (flip one bit)</label>
+    <span id="status">No session yet.</span>
+  </div>
+
+  <div class="peers">
+    <section class="peer" id="alice" aria-label="Alice">
+      <h2>Alice</h2>
+      <div class="meta">
+        <div><b>Public key</b><code data-f="pub">-</code></div>
+        <div><b>Shared key ID</b><code data-f="fp">-</code></div>
+      </div>
+      <div class="msgs" data-f="msgs" aria-live="polite"></div>
+      <form class="send"><input type="text" placeholder="Message to Bob" disabled aria-label="Message from Alice"><button disabled>Send</button></form>
+    </section>
+
+    <section class="peer" id="bob" aria-label="Bob">
+      <h2>Bob</h2>
+      <div class="meta">
+        <div><b>Public key</b><code data-f="pub">-</code></div>
+        <div><b>Shared key ID</b><code data-f="fp">-</code></div>
+      </div>
+      <div class="msgs" data-f="msgs" aria-live="polite"></div>
+      <form class="send"><input type="text" placeholder="Message to Alice" disabled aria-label="Message from Bob"><button disabled>Send</button></form>
+    </section>
+  </div>
+
+  <div class="wire">
+    <h3>What an eavesdropper sees <span>(the network only carries public keys, IVs and ciphertext)</span></h3>
+    <div id="wirelog"><div class="row">Nothing sent yet.</div></div>
+  </div>
+</main>
+
+<script>
+/* =====================================================================
+   ECDH + AES-GCM secure chat using the Web Crypto API
+   ---------------------------------------------------------------------
+   1. Each peer generates an ECDH key pair (curve P-256).
+   2. Peers swap PUBLIC keys over the (untrusted) channel.
+   3. Each peer runs ECDH(own private key, peer public key) -> same secret.
+   4. The secret goes through HKDF-SHA-256 to become a 256-bit AES-GCM key.
+   5. Every message: fresh random 96-bit IV + AES-GCM encryption.
+      GCM also authenticates, so tampered data fails to decrypt.
+   ===================================================================== */
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+/* ---------- helpers ---------- */
+const toHex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const short = (hex, n = 24) => hex.length > n * 2 ? hex.slice(0, n) + "..." + hex.slice(-8) : hex;
+
+/* ---------- crypto primitives ---------- */
+
+// Step 1: generate an ECDH key pair. Private key is non-extractable.
+function generateKeyPair() {
+  return crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+}
+
+// Step 2: export the public key as raw bytes (65 bytes, uncompressed point) to send over the wire.
+async function exportPublic(key) {
+  return crypto.subtle.exportKey("raw", key);
+}
+
+// Import a peer's raw public key.
+function importPublic(raw) {
+  return crypto.subtle.importKey("raw", raw, { name: "ECDH", namedCurve: "P-256" }, true, []);
+}
+
+// Steps 3-4: ECDH -> shared secret -> HKDF -> AES-GCM key.
+async function deriveSessionKey(myPrivate, theirPublic) {
+  const secret = await crypto.subtle.deriveBits({ name: "ECDH", public: theirPublic }, myPrivate, 256);
+  const hkdfKey = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey", "deriveBits"]);
+  const params = { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: enc.encode("ecdh-chat-v1") };
+
+  // Short key ID (not secret-revealing) so you can SEE both peers derived the same key.
+  const idBits = await crypto.subtle.deriveBits({ ...params, info: enc.encode("key-id") }, hkdfKey, 64);
+
+  const aesKey = await crypto.subtle.deriveKey(params, hkdfKey,
+    { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  return { aesKey, keyId: toHex(idBits) };
+}
+
+// Step 5: encrypt with a fresh random IV.
+async function encrypt(aesKey, text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, enc.encode(text));
+  return { iv: toB64(iv), ct: toB64(ct) };
+}
+
+async function decrypt(aesKey, packet) {
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromB64(packet.iv) }, aesKey, fromB64(packet.ct));
+  return dec.decode(pt);
+}
+
+/* ---------- simulated network ----------
+   A real app would use WebSocket / WebRTC. Here the "network" is a function that
+   logs what an eavesdropper could see and delivers the packet to the other peer. */
+const wirelog = document.getElementById("wirelog");
+function logWire(tag, cls, html) {
+  if (wirelog.firstElementChild && wirelog.firstElementChild.textContent === "Nothing sent yet.") wirelog.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<span class="tag ${cls}">${tag}</span> ${html}`;
+  wirelog.appendChild(row);
+  wirelog.scrollTop = wirelog.scrollHeight;
+}
+
+/* ---------- Peer ---------- */
+class Peer {
+  constructor(name, rootId, cls) {
+    this.name = name; this.cls = cls;
+    this.root = document.getElementById(rootId);
+    this.$ = f => this.root.querySelector(`[data-f="${f}"]`);
+    this.form = this.root.querySelector("form");
+    this.input = this.form.querySelector("input");
+    this.btn = this.form.querySelector("button");
+    this.other = null;
+    this.reset();
+    this.form.addEventListener("submit", e => { e.preventDefault(); this.send(); });
+  }
+  reset() {
+    this.keys = null; this.session = null;
+    this.$("pub").textContent = "-"; this.$("fp").textContent = "-"; this.$("msgs").innerHTML = "";
+    this.input.disabled = this.btn.disabled = true; this.input.value = "";
+  }
+  async init() {
+    this.keys = await generateKeyPair();
+    this.pubRaw = await exportPublic(this.keys.publicKey);
+    this.$("pub").textContent = short(toHex(this.pubRaw));
+  }
+  async receivePublicKey(raw) {
+    const theirPub = await importPublic(raw);
+    this.session = await deriveSessionKey(this.keys.privateKey, theirPub);
+    this.$("fp").textContent = this.session.keyId;
+    this.input.disabled = this.btn.disabled = false;
+  }
+  addMsg(text, kind) {
+    const d = document.createElement("div");
+    d.className = "msg " + (kind || "");
+    d.textContent = text;
+    const box = this.$("msgs"); box.appendChild(d); box.scrollTop = box.scrollHeight;
+  }
+  async send() {
+    const text = this.input.value.trim();
+    if (!text || !this.session) return;
+    this.input.value = "";
+    this.addMsg(text, "me");
+    const packet = await encrypt(this.session.aesKey, text);
+
+    // Optional demo: flip one bit to show that AES-GCM detects tampering.
+    let tampered = false;
+    if (document.getElementById("tamper").checked) {
+      const bytes = fromB64(packet.ct); bytes[0] ^= 1; packet.ct = toB64(bytes);
+      tampered = true; document.getElementById("tamper").checked = false;
+    }
+    logWire(`${this.name} -> ${this.other.name}`, this.cls,
+      `iv=${packet.iv} ct=${packet.ct}` + (tampered ? ` <span class="tamper">[tampered in transit]</span>` : ""));
+    await this.other.receive(packet);
+  }
+  async receive(packet) {
+    try {
+      const text = await decrypt(this.session.aesKey, packet);
+      this.addMsg(text);
+    } catch {
+      this.addMsg("Decryption failed: authentication tag mismatch. Message was altered.", "err");
+    }
+  }
+}
+
+/* ---------- wiring ---------- */
+const alice = new Peer("Alice", "alice", "a");
+const bob = new Peer("Bob", "bob", "b");
+alice.other = bob; bob.other = alice;
+
+const statusEl = document.getElementById("status");
+const hsBtn = document.getElementById("handshake");
+
+hsBtn.addEventListener("click", async () => {
+  if (!crypto.subtle) { statusEl.textContent = "Web Crypto needs HTTPS or localhost."; return; }
+  hsBtn.disabled = true;
+  await Promise.all([alice.init(), bob.init()]);
+
+  // Public keys cross the wire. Private keys never leave their owner.
+  logWire("Alice -> Bob", "a", `public key: ${toHex(alice.pubRaw)}`);
+  logWire("Bob -> Alice", "b", `public key: ${toHex(bob.pubRaw)}`);
+  await bob.receivePublicKey(alice.pubRaw);
+  await alice.receivePublicKey(bob.pubRaw);
+
+  const same = alice.session.keyId === bob.session.keyId;
+  logWire("Result", "k", same
+    ? `Both peers derived the same AES-256 key (ID ${alice.session.keyId}). The key itself was never transmitted.`
+    : "Key mismatch.");
+  statusEl.textContent = same ? "Secure session established." : "Key mismatch.";
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  alice.reset(); bob.reset();
+  wirelog.innerHTML = '<div class="row">Nothing sent yet.</div>';
+  statusEl.textContent = "No session yet.";
+  hsBtn.disabled = false;
+});
+</script>
+</body>
+</html>
